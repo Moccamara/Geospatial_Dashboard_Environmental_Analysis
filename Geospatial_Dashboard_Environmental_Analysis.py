@@ -15,27 +15,30 @@ st.set_page_config(
 )
 
 # =========================================================
-# GOOGLE EARTH ENGINE INIT (SERVICE ACCOUNT – SAFE)
+# SAFE GOOGLE EARTH ENGINE INITIALIZATION
 # =========================================================
-service_account_info = {
-    "type": st.secrets["ee"]["type"],
-    "project_id": st.secrets["ee"]["project_id"],
-    "private_key_id": st.secrets["ee"]["private_key_id"],
-    "private_key": st.secrets["ee"]["private_key"],
-    "client_email": st.secrets["ee"]["client_email"],
-    "client_id": st.secrets["ee"]["client_id"],
-    "auth_uri": st.secrets["ee"]["auth_uri"],
-    "token_uri": st.secrets["ee"]["token_uri"],
-    "auth_provider_x509_cert_url": st.secrets["ee"]["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": st.secrets["ee"]["client_x509_cert_url"],
-}
+def init_ee():
+    if "ee" not in st.secrets:
+        st.error(
+            "❌ Google Earth Engine credentials not found.\n\n"
+            "Please add a [ee] section to `.streamlit/secrets.toml` "
+            "or Streamlit Cloud → App Settings → Secrets."
+        )
+        st.stop()
 
-credentials = ee.ServiceAccountCredentials(
-    service_account_info["client_email"],
-    key_data=json.dumps(service_account_info),
-)
+    try:
+        ee_secrets = dict(st.secrets["ee"])
+        credentials = ee.ServiceAccountCredentials(
+            ee_secrets["client_email"],
+            key_data=json.dumps(ee_secrets),
+        )
+        ee.Initialize(credentials)
+    except Exception as e:
+        st.error("❌ Failed to initialize Google Earth Engine.")
+        st.exception(e)
+        st.stop()
 
-ee.Initialize(credentials)
+init_ee()
 
 # =========================================================
 # HEADER
@@ -59,7 +62,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================
-# SIDEBAR – FILTERS
+# SIDEBAR FILTERS
 # =========================================================
 st.sidebar.header("Data Filters")
 
@@ -71,7 +74,7 @@ date_range = st.sidebar.date_input(
 apply = st.sidebar.button("Apply Filters", use_container_width=True)
 
 if not apply:
-    st.info("Set the date range and click **Apply Filters**")
+    st.info("Select a date range and click **Apply Filters**.")
     st.stop()
 
 # =========================================================
@@ -81,7 +84,7 @@ mali = ee.FeatureCollection("FAO/GAUL/2015/level0") \
     .filter(ee.Filter.eq("ADM0_NAME", "Mali"))
 
 # =========================================================
-# SENTINEL-2 NDVI
+# SENTINEL-2 NDVI COMPUTATION
 # =========================================================
 start_date = str(date_range[0])
 end_date = str(date_range[1])
@@ -121,7 +124,7 @@ max_val = stats["NDVI_max"]
 col_map, col_stats = st.columns([3, 1])
 
 # =========================================================
-# MAP
+# MAP DISPLAY
 # =========================================================
 with col_map:
     st.subheader("NDVI Map – Mali (Sentinel-2)")
@@ -131,7 +134,7 @@ with col_map:
     ndvi_vis = {
         "min": 0,
         "max": 1,
-        "palette": ["red", "yellow", "green"],
+        "palette": ["red", "yellow", "green"]
     }
 
     Map.addLayer(ndvi, ndvi_vis, "NDVI")
@@ -140,7 +143,7 @@ with col_map:
     Map.to_streamlit(height=520)
 
 # =========================================================
-# STATISTICS + PDF EXPORT
+# STATISTICS & PDF EXPORT
 # =========================================================
 with col_stats:
     st.subheader("NDVI Statistics")
@@ -158,10 +161,8 @@ with col_stats:
 
         pdf.cell(0, 10, "NDVI Environmental Report – Mali", ln=True)
         pdf.ln(5)
-
         pdf.cell(0, 10, f"Period: {start_date} to {end_date}", ln=True)
         pdf.ln(5)
-
         pdf.cell(0, 10, f"Mean NDVI: {mean_v:.2f}", ln=True)
         pdf.cell(0, 10, f"Max NDVI: {max_v:.2f}", ln=True)
         pdf.cell(0, 10, f"Min NDVI: {min_v:.2f}", ln=True)
@@ -170,8 +171,8 @@ with col_stats:
         pdf.multi_cell(
             0, 8,
             "This report was generated using Sentinel-2 imagery "
-            "processed in Google Earth Engine and visualized "
-            "via a Streamlit geospatial dashboard."
+            "processed with Google Earth Engine and visualized "
+            "in a Streamlit-based geospatial dashboard."
         )
 
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
@@ -185,7 +186,7 @@ with col_stats:
             "📄 Download NDVI Report (PDF)",
             f,
             file_name="NDVI_Mali_Report.pdf",
-            mime="application/pdf",
+            mime="application/pdf"
         )
 
 # =========================================================
