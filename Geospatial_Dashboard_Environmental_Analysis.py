@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # =========================================================
-# GOOGLE EARTH ENGINE INITIALIZATION (FIXED)
+# GOOGLE EARTH ENGINE INITIALIZATION (NO JSON)
 # =========================================================
 def init_ee():
     try:
@@ -22,12 +22,10 @@ def init_ee():
 
         credentials = ee.ServiceAccountCredentials(
             ee_secrets["client_email"],
-            key_data=ee_secrets["private_key"],
+            key_data=ee_secrets["private_key"].strip(),
         )
 
         ee.Initialize(credentials)
-
-        st.success("✅ Google Earth Engine initialized successfully")
 
     except Exception as e:
         st.error("❌ Failed to initialize Google Earth Engine.")
