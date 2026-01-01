@@ -2,7 +2,6 @@ import streamlit as st
 import ee
 import geemap.foliumap as geemap
 import pandas as pd
-import json
 from fpdf import FPDF
 import tempfile
 
@@ -15,24 +14,21 @@ st.set_page_config(
 )
 
 # =========================================================
-# SAFE GOOGLE EARTH ENGINE INITIALIZATION
+# GOOGLE EARTH ENGINE INITIALIZATION (FIXED)
 # =========================================================
 def init_ee():
-    if "ee" not in st.secrets:
-        st.error(
-            "❌ Google Earth Engine credentials not found.\n\n"
-            "Please add a [ee] section to `.streamlit/secrets.toml` "
-            "or Streamlit Cloud → App Settings → Secrets."
-        )
-        st.stop()
-
     try:
-        ee_secrets = dict(st.secrets["ee"])
+        ee_secrets = st.secrets["ee"]
+
         credentials = ee.ServiceAccountCredentials(
             ee_secrets["client_email"],
-            key_data=json.dumps(ee_secrets),
+            key_data=ee_secrets["private_key"],
         )
+
         ee.Initialize(credentials)
+
+        st.success("✅ Google Earth Engine initialized successfully")
+
     except Exception as e:
         st.error("❌ Failed to initialize Google Earth Engine.")
         st.exception(e)
@@ -78,13 +74,15 @@ if not apply:
     st.stop()
 
 # =========================================================
-# MALI BOUNDARY (GEE)
+# MALI BOUNDARY
 # =========================================================
-mali = ee.FeatureCollection("FAO/GAUL/2015/level0") \
+mali = (
+    ee.FeatureCollection("FAO/GAUL/2015/level0")
     .filter(ee.Filter.eq("ADM0_NAME", "Mali"))
+)
 
 # =========================================================
-# SENTINEL-2 NDVI COMPUTATION
+# SENTINEL-2 NDVI
 # =========================================================
 start_date = str(date_range[0])
 end_date = str(date_range[1])
@@ -124,7 +122,7 @@ max_val = stats["NDVI_max"]
 col_map, col_stats = st.columns([3, 1])
 
 # =========================================================
-# MAP DISPLAY
+# MAP
 # =========================================================
 with col_map:
     st.subheader("NDVI Map – Mali (Sentinel-2)")
@@ -134,7 +132,7 @@ with col_map:
     ndvi_vis = {
         "min": 0,
         "max": 1,
-        "palette": ["red", "yellow", "green"]
+        "palette": ["red", "yellow", "green"],
     }
 
     Map.addLayer(ndvi, ndvi_vis, "NDVI")
@@ -143,7 +141,7 @@ with col_map:
     Map.to_streamlit(height=520)
 
 # =========================================================
-# STATISTICS & PDF EXPORT
+# STATISTICS + PDF EXPORT
 # =========================================================
 with col_stats:
     st.subheader("NDVI Statistics")
@@ -186,7 +184,7 @@ with col_stats:
             "📄 Download NDVI Report (PDF)",
             f,
             file_name="NDVI_Mali_Report.pdf",
-            mime="application/pdf"
+            mime="application/pdf",
         )
 
 # =========================================================
