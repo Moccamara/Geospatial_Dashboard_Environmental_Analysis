@@ -1,38 +1,47 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import geopandas as gpd
 import folium
 import plotly.express as px
 from streamlit_folium import st_folium
-from shapely.geometry import box
 
-
-# --------------------------------------------------
-# Page config
-# --------------------------------------------------
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 st.set_page_config(
     page_title="Geospatial Dashboard – Environmental Analysis",
     layout="wide"
 )
 
-# --------------------------------------------------
-# Header
-# --------------------------------------------------
-st.markdown(
-    """
-    <h1 style='text-align:center;'>Geospatial Dashboard – Environmental Analysis</h1>
-    <h4 style='text-align:center; color:gray;'>
-    Interactive Geospatial Analysis & Remote Sensing Visualization
-    </h4>
-    <hr>
-    """,
-    unsafe_allow_html=True
-)
+# =========================================================
+# HEADER (Styled)
+# =========================================================
+st.markdown("""
+<style>
+.header {
+    background: linear-gradient(90deg, #2e7d32, #66bb6a);
+    padding: 18px;
+    border-radius: 6px;
+    color: white;
+    text-align: center;
+    margin-bottom: 15px;
+}
+.card {
+    background-color: #f9f9f9;
+    padding: 15px;
+    border-radius: 6px;
+}
+</style>
 
-# --------------------------------------------------
-# Sidebar – Filters
-# --------------------------------------------------
+<div class="header">
+    <h2>Geospatial Dashboard – Environmental Analysis</h2>
+    <p>Interactive Geospatial Analysis & Remote Sensing Visualization</p>
+</div>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# SIDEBAR – FILTERS
+# =========================================================
 st.sidebar.header("Data Filters")
 
 region = st.sidebar.selectbox(
@@ -52,122 +61,145 @@ date_range = st.sidebar.date_input(
 
 elevation = st.sidebar.slider(
     "Elevation (m)",
-    min_value=0,
-    max_value=2000,
-    value=(0, 2000)
+    0, 2000, (0, 2000)
 )
 
-apply = st.sidebar.button("Apply Filters")
+apply = st.sidebar.button("Apply Filters", use_container_width=True)
 
-# --------------------------------------------------
-# Simulated geospatial data (NDVI-like raster grid)
-# --------------------------------------------------
-np.random.seed(42)
+# =========================================================
+# TABS
+# =========================================================
+tab1, tab2, tab3 = st.tabs(
+    ["Raster Analysis", "Vector Data", "3D Terrain"]
+)
 
-xmin, ymin, xmax, ymax = -12, 10, 4, 25  # West Africa bbox
-n = 40
+# =========================================================
+# RASTER ANALYSIS TAB
+# =========================================================
+with tab1:
 
-xs = np.linspace(xmin, xmax, n)
-ys = np.linspace(ymin, ymax, n)
+    # -----------------------------------------------------
+    # SIMULATED NDVI DATA
+    # -----------------------------------------------------
+    np.random.seed(42)
 
-records = []
-for x in xs:
-    for y in ys:
-        records.append({
-            "lon": x,
-            "lat": y,
-            "value": np.clip(np.random.normal(0.6, 0.15), 0, 1)
+    xmin, ymin, xmax, ymax = -12, 10, 4, 25  # West Africa
+    n = 40
+
+    xs = np.linspace(xmin, xmax, n)
+    ys = np.linspace(ymin, ymax, n)
+
+    records = []
+    for x in xs:
+        for y in ys:
+            records.append({
+                "lon": x,
+                "lat": y,
+                "value": np.clip(np.random.normal(0.6, 0.15), 0, 1)
+            })
+
+    df = pd.DataFrame(records)
+
+    mean_val = df["value"].mean()
+    max_val = df["value"].max()
+    min_val = df["value"].min()
+
+    # -----------------------------------------------------
+    # LAYOUT
+    # -----------------------------------------------------
+    col_map, col_right = st.columns([3, 1.6])
+
+    # -----------------------------------------------------
+    # MAP
+    # -----------------------------------------------------
+    with col_map:
+        st.subheader(f"{dataset} Map")
+
+        m = folium.Map(
+            location=[17, -4],
+            zoom_start=5,
+            tiles="cartodbpositron"
+        )
+
+        for _, r in df.iterrows():
+            folium.CircleMarker(
+                location=[r["lat"], r["lon"]],
+                radius=4,
+                fill=True,
+                fill_color=(
+                    "green" if r["value"] > 0.6
+                    else "orange" if r["value"] > 0.4
+                    else "red"
+                ),
+                fill_opacity=0.7,
+                color=None,
+                tooltip=f"{dataset}: {r['value']:.2f}"
+            ).add_to(m)
+
+        st_folium(m, height=520, use_container_width=True)
+
+        # KPI Cards
+        st.markdown("### Statistics")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Mean NDVI", f"{mean_val:.2f}")
+        c2.metric("Max NDVI", f"{max_val:.2f}")
+        c3.metric("Min NDVI", f"{min_val:.2f}")
+
+    # -----------------------------------------------------
+    # CHARTS
+    # -----------------------------------------------------
+    with col_right:
+        st.subheader(f"{dataset} Time Series")
+
+        dates = pd.date_range(date_range[0], date_range[1])
+        ts = pd.DataFrame({
+            "Date": dates,
+            "Value": np.clip(
+                np.random.normal(mean_val, 0.05, len(dates)), 0, 1
+            )
         })
 
-df_points = pd.DataFrame(records)
-
-# Statistics
-mean_val = df_points["value"].mean()
-max_val = df_points["value"].max()
-min_val = df_points["value"].min()
-
-# --------------------------------------------------
-# Layout
-# --------------------------------------------------
-col_map, col_right = st.columns([2.5, 1.5])
-
-# --------------------------------------------------
-# Map
-# --------------------------------------------------
-with col_map:
-    st.subheader(f"{dataset} Map")
-
-    m = folium.Map(location=[17, -4], zoom_start=5, tiles="cartodbpositron")
-
-    for _, row in df_points.iterrows():
-        folium.CircleMarker(
-            location=[row["lat"], row["lon"]],
-            radius=4,
-            color=None,
-            fill=True,
-            fill_color=(
-                "green" if row["value"] > 0.6
-                else "orange" if row["value"] > 0.4
-                else "red"
-            ),
-            fill_opacity=0.7,
-            tooltip=f"{dataset}: {row['value']:.2f}"
-        ).add_to(m)
-
-    st_folium(m, height=520, width=None)
-
-    # Statistics
-    st.markdown("### Statistics")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Mean", f"{mean_val:.2f}")
-    c2.metric("Max", f"{max_val:.2f}")
-    c3.metric("Min", f"{min_val:.2f}")
-
-# --------------------------------------------------
-# Right panel – Charts
-# --------------------------------------------------
-with col_right:
-    st.subheader(f"{dataset} Time Series")
-
-    dates = pd.date_range(date_range[0], date_range[1])
-    ts = pd.DataFrame({
-        "Date": dates,
-        "Value": np.clip(
-            np.random.normal(mean_val, 0.05, len(dates)), 0, 1
+        fig_ts = px.line(
+            ts,
+            x="Date",
+            y="Value",
+            markers=True,
+            labels={"Value": dataset}
         )
-    })
+        st.plotly_chart(fig_ts, use_container_width=True)
 
-    fig_ts = px.line(
-        ts,
-        x="Date",
-        y="Value",
-        markers=True,
-        labels={"Value": dataset}
-    )
-    st.plotly_chart(fig_ts, use_container_width=True)
+        st.subheader("Land Cover Distribution")
 
-    st.subheader("Land Cover Distribution")
+        lc = pd.DataFrame({
+            "Class": ["Forest", "Agriculture", "Water", "Urban"],
+            "Percentage": [45, 30, 15, 10]
+        })
 
-    lc = pd.DataFrame({
-        "Class": ["Forest", "Agriculture", "Water", "Urban"],
-        "Percentage": [45, 30, 15, 10]
-    })
+        fig_pie = px.pie(
+            lc,
+            names="Class",
+            values="Percentage",
+            hole=0.4
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    fig_pie = px.pie(
-        lc,
-        names="Class",
-        values="Percentage",
-        hole=0.4
-    )
-    st.plotly_chart(fig_pie, use_container_width=True)
+# =========================================================
+# VECTOR DATA TAB
+# =========================================================
+with tab2:
+    st.info("Vector data visualization coming soon.")
 
-# --------------------------------------------------
-# Footer buttons
-# --------------------------------------------------
+# =========================================================
+# 3D TERRAIN TAB
+# =========================================================
+with tab3:
+    st.info("3D terrain visualization coming soon.")
+
+# =========================================================
+# FOOTER ACTIONS
+# =========================================================
 st.markdown("<hr>", unsafe_allow_html=True)
-c1, c2, c3 = st.columns(3)
-
-c1.button("⬇️ Download Data")
-c2.button("📄 Generate Report")
-
-c3.button("ℹ️ About this Dashboard")
+b1, b2, b3 = st.columns(3)
+b1.button("⬇️ Download Data")
+b2.button("📄 Generate Report")
+b3.button("ℹ️ About this Dashboard")
