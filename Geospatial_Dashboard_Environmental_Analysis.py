@@ -1,10 +1,10 @@
 import streamlit as st
 import ee
 import geemap.foliumap as geemap
-import geopandas as gpd
+import pandas as pd
+import json
 from fpdf import FPDF
 import tempfile
-import pandas as pd
 
 # =========================================================
 # PAGE CONFIG
@@ -15,9 +15,27 @@ st.set_page_config(
 )
 
 # =========================================================
-# GOOGLE EARTH ENGINE INIT
+# GOOGLE EARTH ENGINE INIT (SERVICE ACCOUNT – SAFE)
 # =========================================================
-ee.Initialize()
+service_account_info = {
+    "type": st.secrets["ee"]["type"],
+    "project_id": st.secrets["ee"]["project_id"],
+    "private_key_id": st.secrets["ee"]["private_key_id"],
+    "private_key": st.secrets["ee"]["private_key"],
+    "client_email": st.secrets["ee"]["client_email"],
+    "client_id": st.secrets["ee"]["client_id"],
+    "auth_uri": st.secrets["ee"]["auth_uri"],
+    "token_uri": st.secrets["ee"]["token_uri"],
+    "auth_provider_x509_cert_url": st.secrets["ee"]["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": st.secrets["ee"]["client_x509_cert_url"],
+}
+
+credentials = ee.ServiceAccountCredentials(
+    service_account_info["client_email"],
+    key_data=json.dumps(service_account_info),
+)
+
+ee.Initialize(credentials)
 
 # =========================================================
 # HEADER
@@ -45,11 +63,6 @@ st.markdown("""
 # =========================================================
 st.sidebar.header("Data Filters")
 
-dataset = st.sidebar.selectbox(
-    "Dataset",
-    ["NDVI (Sentinel-2)"]
-)
-
 date_range = st.sidebar.date_input(
     "Date Range",
     [pd.to_datetime("2021-06-01"), pd.to_datetime("2021-06-30")]
@@ -58,14 +71,14 @@ date_range = st.sidebar.date_input(
 apply = st.sidebar.button("Apply Filters", use_container_width=True)
 
 if not apply:
-    st.info("Adjust filters and click **Apply Filters**")
+    st.info("Set the date range and click **Apply Filters**")
     st.stop()
 
 # =========================================================
-# LOAD MALI BOUNDARY (GEE)
+# MALI BOUNDARY (GEE)
 # =========================================================
 mali = ee.FeatureCollection("FAO/GAUL/2015/level0") \
-          .filter(ee.Filter.eq("ADM0_NAME", "Mali"))
+    .filter(ee.Filter.eq("ADM0_NAME", "Mali"))
 
 # =========================================================
 # SENTINEL-2 NDVI
@@ -73,23 +86,26 @@ mali = ee.FeatureCollection("FAO/GAUL/2015/level0") \
 start_date = str(date_range[0])
 end_date = str(date_range[1])
 
-s2 = ee.ImageCollection("COPERNICUS/S2_SR") \
-    .filterBounds(mali) \
-    .filterDate(start_date, end_date) \
+s2 = (
+    ee.ImageCollection("COPERNICUS/S2_SR")
+    .filterBounds(mali)
+    .filterDate(start_date, end_date)
     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+)
 
-ndvi = s2.map(
-    lambda img: img.normalizedDifference(["B8", "B4"])
-                  .rename("NDVI")
-).mean().clip(mali)
+ndvi = (
+    s2.map(lambda img: img.normalizedDifference(["B8", "B4"]).rename("NDVI"))
+    .mean()
+    .clip(mali)
+)
 
 # =========================================================
 # NDVI STATISTICS
 # =========================================================
 stats = ndvi.reduceRegion(
     reducer=ee.Reducer.mean()
-            .combine(ee.Reducer.min(), "", True)
-            .combine(ee.Reducer.max(), "", True),
+    .combine(ee.Reducer.min(), "", True)
+    .combine(ee.Reducer.max(), "", True),
     geometry=mali.geometry(),
     scale=10,
     maxPixels=1e13
@@ -115,7 +131,7 @@ with col_map:
     ndvi_vis = {
         "min": 0,
         "max": 1,
-        "palette": ["red", "yellow", "green"]
+        "palette": ["red", "yellow", "green"],
     }
 
     Map.addLayer(ndvi, ndvi_vis, "NDVI")
@@ -124,10 +140,10 @@ with col_map:
     Map.to_streamlit(height=520)
 
 # =========================================================
-# STATISTICS
+# STATISTICS + PDF EXPORT
 # =========================================================
 with col_stats:
-    st.subheader("Statistics")
+    st.subheader("NDVI Statistics")
 
     st.metric("Mean NDVI", f"{mean_val:.2f}")
     st.metric("Max NDVI", f"{max_val:.2f}")
@@ -135,9 +151,6 @@ with col_stats:
 
     st.markdown("---")
 
-    # =====================================================
-    # PDF REPORT
-    # =====================================================
     def generate_pdf(mean_v, min_v, max_v):
         pdf = FPDF()
         pdf.add_page()
@@ -150,15 +163,15 @@ with col_stats:
         pdf.ln(5)
 
         pdf.cell(0, 10, f"Mean NDVI: {mean_v:.2f}", ln=True)
-        pdf.cell(0, 10, f"Maximum NDVI: {max_v:.2f}", ln=True)
-        pdf.cell(0, 10, f"Minimum NDVI: {min_v:.2f}", ln=True)
+        pdf.cell(0, 10, f"Max NDVI: {max_v:.2f}", ln=True)
+        pdf.cell(0, 10, f"Min NDVI: {min_v:.2f}", ln=True)
 
         pdf.ln(10)
         pdf.multi_cell(
             0, 8,
             "This report was generated using Sentinel-2 imagery "
             "processed in Google Earth Engine and visualized "
-            "through a Streamlit-based Geospatial Dashboard."
+            "via a Streamlit geospatial dashboard."
         )
 
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
@@ -172,13 +185,11 @@ with col_stats:
             "📄 Download NDVI Report (PDF)",
             f,
             file_name="NDVI_Mali_Report.pdf",
-            mime="application/pdf"
+            mime="application/pdf",
         )
 
 # =========================================================
 # FOOTER
 # =========================================================
 st.markdown("<hr>", unsafe_allow_html=True)
-st.caption(
-    "© Geospatial Dashboard | Sentinel-2 • Google Earth Engine • Mali"
-)
+st.caption("© Sentinel-2 • Google Earth Engine • Mali")
