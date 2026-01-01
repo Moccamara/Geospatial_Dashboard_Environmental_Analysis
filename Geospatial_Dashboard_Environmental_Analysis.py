@@ -1,9 +1,10 @@
 import streamlit as st
-import numpy as np
+import ee
+import geemap.foliumap as geemap
+import geopandas as gpd
+from fpdf import FPDF
+import tempfile
 import pandas as pd
-import folium
-import plotly.express as px
-from streamlit_folium import st_folium
 
 # =========================================================
 # PAGE CONFIG
@@ -14,7 +15,12 @@ st.set_page_config(
 )
 
 # =========================================================
-# HEADER (Styled)
+# GOOGLE EARTH ENGINE INIT
+# =========================================================
+ee.Initialize()
+
+# =========================================================
+# HEADER
 # =========================================================
 st.markdown("""
 <style>
@@ -26,16 +32,11 @@ st.markdown("""
     text-align: center;
     margin-bottom: 15px;
 }
-.card {
-    background-color: #f9f9f9;
-    padding: 15px;
-    border-radius: 6px;
-}
 </style>
 
 <div class="header">
     <h2>Geospatial Dashboard – Environmental Analysis</h2>
-    <p>Interactive Geospatial Analysis & Remote Sensing Visualization</p>
+    <p>Sentinel-2 NDVI | Google Earth Engine | Mali</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -44,14 +45,9 @@ st.markdown("""
 # =========================================================
 st.sidebar.header("Data Filters")
 
-region = st.sidebar.selectbox(
-    "Select Region",
-    ["Region A", "Region B", "Region C"]
-)
-
 dataset = st.sidebar.selectbox(
-    "Select Dataset",
-    ["NDVI", "NDBI", "NDWI"]
+    "Dataset",
+    ["NDVI (Sentinel-2)"]
 )
 
 date_range = st.sidebar.date_input(
@@ -59,147 +55,130 @@ date_range = st.sidebar.date_input(
     [pd.to_datetime("2021-06-01"), pd.to_datetime("2021-06-30")]
 )
 
-elevation = st.sidebar.slider(
-    "Elevation (m)",
-    0, 2000, (0, 2000)
-)
-
 apply = st.sidebar.button("Apply Filters", use_container_width=True)
 
-# =========================================================
-# TABS
-# =========================================================
-tab1, tab2, tab3 = st.tabs(
-    ["Raster Analysis", "Vector Data", "3D Terrain"]
-)
+if not apply:
+    st.info("Adjust filters and click **Apply Filters**")
+    st.stop()
 
 # =========================================================
-# RASTER ANALYSIS TAB
+# LOAD MALI BOUNDARY (GEE)
 # =========================================================
-with tab1:
+mali = ee.FeatureCollection("FAO/GAUL/2015/level0") \
+          .filter(ee.Filter.eq("ADM0_NAME", "Mali"))
 
-    # -----------------------------------------------------
-    # SIMULATED NDVI DATA
-    # -----------------------------------------------------
-    np.random.seed(42)
+# =========================================================
+# SENTINEL-2 NDVI
+# =========================================================
+start_date = str(date_range[0])
+end_date = str(date_range[1])
 
-    xmin, ymin, xmax, ymax = -12, 10, 4, 25  # West Africa
-    n = 40
+s2 = ee.ImageCollection("COPERNICUS/S2_SR") \
+    .filterBounds(mali) \
+    .filterDate(start_date, end_date) \
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
 
-    xs = np.linspace(xmin, xmax, n)
-    ys = np.linspace(ymin, ymax, n)
+ndvi = s2.map(
+    lambda img: img.normalizedDifference(["B8", "B4"])
+                  .rename("NDVI")
+).mean().clip(mali)
 
-    records = []
-    for x in xs:
-        for y in ys:
-            records.append({
-                "lon": x,
-                "lat": y,
-                "value": np.clip(np.random.normal(0.6, 0.15), 0, 1)
-            })
+# =========================================================
+# NDVI STATISTICS
+# =========================================================
+stats = ndvi.reduceRegion(
+    reducer=ee.Reducer.mean()
+            .combine(ee.Reducer.min(), "", True)
+            .combine(ee.Reducer.max(), "", True),
+    geometry=mali.geometry(),
+    scale=10,
+    maxPixels=1e13
+).getInfo()
 
-    df = pd.DataFrame(records)
+mean_val = stats["NDVI_mean"]
+min_val = stats["NDVI_min"]
+max_val = stats["NDVI_max"]
 
-    mean_val = df["value"].mean()
-    max_val = df["value"].max()
-    min_val = df["value"].min()
+# =========================================================
+# LAYOUT
+# =========================================================
+col_map, col_stats = st.columns([3, 1])
 
-    # -----------------------------------------------------
-    # LAYOUT
-    # -----------------------------------------------------
-    col_map, col_right = st.columns([3, 1.6])
+# =========================================================
+# MAP
+# =========================================================
+with col_map:
+    st.subheader("NDVI Map – Mali (Sentinel-2)")
 
-    # -----------------------------------------------------
-    # MAP
-    # -----------------------------------------------------
-    with col_map:
-        st.subheader(f"{dataset} Map")
+    Map = geemap.Map(center=[17, -4], zoom=5)
 
-        m = folium.Map(
-            location=[17, -4],
-            zoom_start=5,
-            tiles="cartodbpositron"
+    ndvi_vis = {
+        "min": 0,
+        "max": 1,
+        "palette": ["red", "yellow", "green"]
+    }
+
+    Map.addLayer(ndvi, ndvi_vis, "NDVI")
+    Map.addLayer(mali, {"color": "black"}, "Mali Boundary")
+
+    Map.to_streamlit(height=520)
+
+# =========================================================
+# STATISTICS
+# =========================================================
+with col_stats:
+    st.subheader("Statistics")
+
+    st.metric("Mean NDVI", f"{mean_val:.2f}")
+    st.metric("Max NDVI", f"{max_val:.2f}")
+    st.metric("Min NDVI", f"{min_val:.2f}")
+
+    st.markdown("---")
+
+    # =====================================================
+    # PDF REPORT
+    # =====================================================
+    def generate_pdf(mean_v, min_v, max_v):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
+
+        pdf.cell(0, 10, "NDVI Environmental Report – Mali", ln=True)
+        pdf.ln(5)
+
+        pdf.cell(0, 10, f"Period: {start_date} to {end_date}", ln=True)
+        pdf.ln(5)
+
+        pdf.cell(0, 10, f"Mean NDVI: {mean_v:.2f}", ln=True)
+        pdf.cell(0, 10, f"Maximum NDVI: {max_v:.2f}", ln=True)
+        pdf.cell(0, 10, f"Minimum NDVI: {min_v:.2f}", ln=True)
+
+        pdf.ln(10)
+        pdf.multi_cell(
+            0, 8,
+            "This report was generated using Sentinel-2 imagery "
+            "processed in Google Earth Engine and visualized "
+            "through a Streamlit-based Geospatial Dashboard."
         )
 
-        for _, r in df.iterrows():
-            folium.CircleMarker(
-                location=[r["lat"], r["lon"]],
-                radius=4,
-                fill=True,
-                fill_color=(
-                    "green" if r["value"] > 0.6
-                    else "orange" if r["value"] > 0.4
-                    else "red"
-                ),
-                fill_opacity=0.7,
-                color=None,
-                tooltip=f"{dataset}: {r['value']:.2f}"
-            ).add_to(m)
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
+        pdf.output(path)
+        return path
 
-        st_folium(m, height=520, use_container_width=True)
+    pdf_path = generate_pdf(mean_val, min_val, max_val)
 
-        # KPI Cards
-        st.markdown("### Statistics")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Mean NDVI", f"{mean_val:.2f}")
-        c2.metric("Max NDVI", f"{max_val:.2f}")
-        c3.metric("Min NDVI", f"{min_val:.2f}")
-
-    # -----------------------------------------------------
-    # CHARTS
-    # -----------------------------------------------------
-    with col_right:
-        st.subheader(f"{dataset} Time Series")
-
-        dates = pd.date_range(date_range[0], date_range[1])
-        ts = pd.DataFrame({
-            "Date": dates,
-            "Value": np.clip(
-                np.random.normal(mean_val, 0.05, len(dates)), 0, 1
-            )
-        })
-
-        fig_ts = px.line(
-            ts,
-            x="Date",
-            y="Value",
-            markers=True,
-            labels={"Value": dataset}
+    with open(pdf_path, "rb") as f:
+        st.download_button(
+            "📄 Download NDVI Report (PDF)",
+            f,
+            file_name="NDVI_Mali_Report.pdf",
+            mime="application/pdf"
         )
-        st.plotly_chart(fig_ts, use_container_width=True)
-
-        st.subheader("Land Cover Distribution")
-
-        lc = pd.DataFrame({
-            "Class": ["Forest", "Agriculture", "Water", "Urban"],
-            "Percentage": [45, 30, 15, 10]
-        })
-
-        fig_pie = px.pie(
-            lc,
-            names="Class",
-            values="Percentage",
-            hole=0.4
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
 
 # =========================================================
-# VECTOR DATA TAB
-# =========================================================
-with tab2:
-    st.info("Vector data visualization coming soon.")
-
-# =========================================================
-# 3D TERRAIN TAB
-# =========================================================
-with tab3:
-    st.info("3D terrain visualization coming soon.")
-
-# =========================================================
-# FOOTER ACTIONS
+# FOOTER
 # =========================================================
 st.markdown("<hr>", unsafe_allow_html=True)
-b1, b2, b3 = st.columns(3)
-b1.button("⬇️ Download Data")
-b2.button("📄 Generate Report")
-b3.button("ℹ️ About this Dashboard")
+st.caption(
+    "© Geospatial Dashboard | Sentinel-2 • Google Earth Engine • Mali"
+)
