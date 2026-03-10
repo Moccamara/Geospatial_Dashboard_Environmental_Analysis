@@ -5,15 +5,23 @@ import geopandas as gpd
 from streamlit_folium import st_folium
 import ee
 import plotly.express as px
+import os
 
 # =========================================================
-# INITIALIZE EARTH ENGINE
+# SERVICE ACCOUNT AUTHENTICATION
 # =========================================================
+# Replace with the path to your service account key JSON
+SERVICE_ACCOUNT_KEY = "service_account.json"
+
+# Set environment variable for Google credentials
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = SERVICE_ACCOUNT_KEY
+
+# Authenticate and initialize Earth Engine with the service account
 try:
-    ee.Initialize()
-except Exception:
-    ee.Authenticate()
-    ee.Initialize()
+    ee.Initialize(ee.ServiceAccountCredentials(None, SERVICE_ACCOUNT_KEY))
+except Exception as e:
+    st.error(f"Earth Engine initialization failed: {e}")
+    st.stop()
 
 # =========================================================
 # PAGE CONFIG
