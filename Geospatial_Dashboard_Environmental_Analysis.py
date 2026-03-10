@@ -1,18 +1,17 @@
 import streamlit as st
 import pandas as pd
 import folium
-import plotly.express as px
 import geopandas as gpd
 from streamlit_folium import st_folium
 import ee
-import geemap.foliumap as geemap
+import plotly.express as px
 
 # =========================================================
 # INITIALIZE EARTH ENGINE
 # =========================================================
 try:
     ee.Initialize()
-except Exception as e:
+except Exception:
     ee.Authenticate()
     ee.Initialize()
 
@@ -67,23 +66,6 @@ date_range = st.sidebar.date_input(
 # =========================================================
 # FUNCTIONS
 # =========================================================
-
-def fetch_ndvi(region_geom, start_date, end_date, dataset_name="MODIS"):
-    """Fetch NDVI from MODIS or Landsat"""
-    
-    if dataset_name == "MODIS":
-        collection = ee.ImageCollection('MODIS/006/MOD13Q1').select('NDVI')
-    elif dataset_name == "Landsat 8":
-        collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR') \
-            .filterDate(start_date, end_date) \
-            .map(lambda img: img.normalizedDifference(['B5','B4']).rename('NDVI'))
-    else:
-        st.error("Dataset not supported")
-        return None
-
-    ndvi_mean = collection.mean().clip(region_geom)
-    return ndvi_mean
-
 def add_country_boundary(map_obj):
     """Add Mali boundary if file exists"""
     try:
@@ -107,27 +89,51 @@ def ndvi_color(val):
     else:
         return "red"
 
-# =========================================================
-# DATA
-# =========================================================
+def fetch_ndvi(region_geom, start_date, end_date, dataset_name="MODIS"):
+    """Fetch NDVI from MODIS or Landsat"""
+    if dataset_name == "MODIS":
+        collection = ee.ImageCollection('MODIS/006/MOD13Q1') \
+            .select('NDVI') \
+            .filterDate(start_date, end_date)
+        ndvi_img = collection.mean().clip(region_geom)
+    elif dataset_name == "Landsat 8":
+        collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR') \
+            .filterDate(start_date, end_date) \
+            .map(lambda img: img.normalizedDifference(['B5','B4']).rename('NDVI'))
+        ndvi_img = collection.mean().clip(region_geom)
+    else:
+        st.error("Dataset not supported")
+        return None
+    return ndvi_img
 
-# Load Mali geometry
+def sample_ndvi_image(ndvi_img, region_geom, num_pixels=1000, scale=500):
+    """Convert NDVI image to pandas DataFrame for visualization"""
+    sample = ndvi_img.sample(region=region_geom, scale=scale, numPixels=num_pixels)
+    sample_dict = sample.getInfo()
+    features = sample_dict['features']
+    df = pd.DataFrame([{
+        'lon': f['geometry']['coordinates'][0],
+        'lat': f['geometry']['coordinates'][1],
+        'ndvi': f['properties']['NDVI']/10000.0 if f['properties']['NDVI'] > 1 else f['properties']['NDVI']
+    } for f in features])
+    return df
+
+# =========================================================
+# LOAD REGION GEOMETRY
+# =========================================================
 try:
     mali_gdf = gpd.read_file("mali_boundary.geojson")
-    mali_geom = geemap.geopandas_to_ee(mali_gdf)
+    mali_geom = ee.Geometry.Polygon(list(mali_gdf.geometry.iloc[0].exterior.coords))
 except:
-    st.warning("Mali boundary file not found. Using default coordinates.")
+    st.warning("Mali boundary file not found. Using default rectangle.")
     mali_geom = ee.Geometry.Rectangle([-12,10,4,25])
 
-# Fetch NDVI image
-ndvi_image = fetch_ndvi(mali_geom, str(date_range[0]), str(date_range[1]), dataset)
-
-# Convert NDVI to sample points for visualization
-sample_points = ndvi_image.sample(region=mali_geom, scale=500, numPixels=1000)
-ndvi_df = geemap.ee_to_pandas(sample_points)
-ndvi_df = ndvi_df.rename(columns={"NDVI":"ndvi"})
-ndvi_df["lon"] = ndvi_df["longitude"]
-ndvi_df["lat"] = ndvi_df["latitude"]
+# =========================================================
+# FETCH NDVI DATA
+# =========================================================
+with st.spinner("Fetching NDVI data from Earth Engine..."):
+    ndvi_image = fetch_ndvi(mali_geom, str(date_range[0]), str(date_range[1]), dataset)
+    ndvi_df = sample_ndvi_image(ndvi_image, mali_geom)
 
 # NDVI stats
 mean_ndvi = ndvi_df["ndvi"].mean()
@@ -166,19 +172,19 @@ with tab1:
 
         st.markdown("### NDVI Statistics")
         c1,c2,c3 = st.columns(3)
-        c1.metric("Mean NDVI",f"{mean_ndvi:.2f}")
-        c2.metric("Max NDVI",f"{max_ndvi:.2f}")
-        c3.metric("Min NDVI",f"{min_ndvi:.2f}")
+        c1.metric("Mean NDVI", f"{mean_ndvi:.2f}")
+        c2.metric("Max NDVI", f"{max_ndvi:.2f}")
+        c3.metric("Min NDVI", f"{min_ndvi:.2f}")
 
     with col_chart:
         st.subheader("NDVI Time Series")
-        dates = pd.date_range(date_range[0],date_range[1])
+        dates = pd.date_range(date_range[0], date_range[1])
         ts = pd.DataFrame({
-            "Date":dates,
-            "NDVI":ndvi_df["ndvi"].sample(len(dates), replace=True).values
+            "Date": dates,
+            "NDVI": ndvi_df["ndvi"].sample(len(dates), replace=True).values
         })
         fig = px.line(ts, x="Date", y="NDVI", markers=True)
-        st.plotly_chart(fig,use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
 # =========================================================
 # STATISTICS TAB
